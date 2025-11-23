@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recon-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: recon-backend
+  template:
+    metadata:
+      labels:
+        app: recon-backend
+    spec:
+      containers:
+      - name: api
+        image: recon-backend:latest
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recon-backend-svc
+spec:
+  type: LoadBalancer
+  selector:
+    app: recon-backend
+  ports:
+  - port: 80
+    targetPort: 8080
