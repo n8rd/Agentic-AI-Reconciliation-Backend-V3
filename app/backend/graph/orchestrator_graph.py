@@ -115,7 +115,7 @@ def build_graph():
     g = StateGraph(ReconState)
     g.add_node("load", node_load)
     g.add_node("map", node_map)
-    g.add_node("approval", node_approval)
+    g.add_node("approval_node", node_approval)
     g.add_node("await", node_await)
     g.add_node("entity_resolve", node_entity_resolve)
     g.add_node("sql", node_sql)
@@ -124,8 +124,8 @@ def build_graph():
 
     g.add_edge(START, "load")
     g.add_edge("load", "map")
-    g.add_edge("map", "approval")
-    g.add_conditional_edges("approval", decide_after_approval,
+    g.add_edge("map", "approval_node")
+    g.add_conditional_edges("approval_node", decide_after_approval,
                             {"entity_resolve": "entity_resolve", "map": "map", "await": "await"})
     g.add_edge("await", END)
     g.add_edge("entity_resolve", "sql")
