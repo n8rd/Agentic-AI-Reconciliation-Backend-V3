@@ -118,7 +118,7 @@ def build_graph():
     g.add_node("approval_node", node_approval)
     g.add_node("await", node_await)
     g.add_node("entity_resolve", node_entity_resolve)
-    g.add_node("sql", node_sql)
+    g.add_node("sql_node", node_sql)
     g.add_node("exec", node_exec)
     g.add_node("explain", node_explain)
 
@@ -128,8 +128,8 @@ def build_graph():
     g.add_conditional_edges("approval_node", decide_after_approval,
                             {"entity_resolve": "entity_resolve", "map": "map", "await": "await"})
     g.add_edge("await", END)
-    g.add_edge("entity_resolve", "sql")
-    g.add_conditional_edges("sql", decide_after_sql,
+    g.add_edge("entity_resolve", "sql_node")
+    g.add_conditional_edges("sql_node", decide_after_sql,
                             {"exec": "exec", "explain": "explain"})
     g.add_edge("exec", "explain")
     g.add_edge("explain", END)
