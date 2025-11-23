@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-ARRAY_UDFS = """CREATE TEMP FUNCTION ARRAY_EXCEPT_CUSTOM(a ARRAY<STRING>, b ARRAY<STRING>)
+ARRAY_UDFS = '''CREATE TEMP FUNCTION ARRAY_EXCEPT_CUSTOM(a ARRAY<STRING>, b ARRAY<STRING>)
 RETURNS ARRAY<STRING>
 LANGUAGE js AS """
   const setB = new Set(b);
@@ -14,8 +14,8 @@ LANGUAGE js AS """
   const inter = a.filter(x => b.includes(x)).length;
   const union = new Set([...a, ...b]).size;
   return union === 0 ? 1 : inter / union;
-""";"""
-
+""";
+'''
 
 def basic_reconciliation_sql(
     table_a: str,
