@@ -1,18 +1,31 @@
 import pandas as pd
+import oracledb  # make sure `python-oracledb` is in requirements.txt
 
-try:
-    import cx_Oracle
-except Exception:
-    cx_Oracle = None
 
 class OracleConnector:
     def load(self, cfg: dict) -> pd.DataFrame:
-        if cx_Oracle is None:
-            raise RuntimeError("cx_Oracle not installed")
-        dsn = cx_Oracle.makedsn(cfg["host"], cfg["port"], service_name=cfg["service"])
-        conn = cx_Oracle.connect(cfg["user"], cfg["password"], dsn)
-        cols = cfg.get("columns", ["*"])
-        sql = f"SELECT {', '.join(cols)} FROM {cfg['table']}"
-        df = pd.read_sql(sql, conn)
-        conn.close()
+        """
+        cfg keys expected:
+          host, port, service, user, password, table
+          optional: columns (list of column names)
+        """
+
+        # Thin mode connection – no Oracle client / Instant Client required
+        conn = oracledb.connect(
+            user=cfg["user"],
+            password=cfg["password"],
+            host=cfg["host"],
+            port=cfg["port"],
+            service_name=cfg["service"],
+        )
+
+        try:
+            cols = cfg.get("columns", ["*"])
+            col_expr = ", ".join(cols)
+            sql = f"SELECT {col_expr} FROM {cfg['table']}"
+
+            df = pd.read_sql(sql, conn)
+        finally:
+            conn.close()
+
         return df
