@@ -47,18 +47,21 @@ def basic_reconciliation_sql(
     where_clauses = numeric_where + array_where
     where_clause = " OR ".join(where_clauses) if where_clauses else "FALSE"
 
+    selects_joined = ",\n".join(numeric_selects + array_selects)
     return f"""{ARRAY_UDFS}
 
-WITH joined AS (
-  SELECT
-    a.*,
-    b.*,
-{',\n'.join(numeric_selects + array_selects)}
-  FROM `{table_a}` a
-  JOIN `{table_b}` b
-    ON {join_cond}
-)
-SELECT *
-FROM joined
-WHERE {where_clause};
-"""
+    WITH joined AS (
+      SELECT
+        a.*,
+        b.*,
+    {selects_joined}
+      FROM `{table_a}` a
+      JOIN `{table_b}` b
+        ON {join_cond}
+    )
+    SELECT *
+    FROM joined
+    WHERE {where_clause};
+    """
+
+
