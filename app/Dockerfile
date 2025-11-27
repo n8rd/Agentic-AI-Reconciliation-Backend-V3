@@ -23,7 +23,7 @@ RUN echo "PWD is:" && pwd && echo "Contents:" ls -al .
 
 # Install dependencies
 RUN pip install --upgrade pip setuptools wheel
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Make sure /app is on Python path explicitly
 ENV PYTHONPATH=/app
