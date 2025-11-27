@@ -19,6 +19,8 @@ COPY requirements.txt /app/requirements.txt
 
 RUN echo "Contents of /app:" && ls -la /app && echo "Contents of /app/backend:" && ls -la /app/backend || true
 
+RUN echo "PWD is:" && pwd && echo "Contents:" ls -al .
+
 # Install dependencies
 RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
