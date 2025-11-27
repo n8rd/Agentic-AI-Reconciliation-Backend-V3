@@ -1,5 +1,14 @@
 FROM python:3.11-slim
 
+# Install system dependencies required to build the 'sasl' wheel
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    libkrb5-dev \
+    libsasl2-dev \
+    libsasl2-modules \
+    && rm -rf /var/lib/apt/lists/* \
+
 # Work under /app in the container
 WORKDIR /app
 
@@ -9,6 +18,7 @@ COPY backend /app/backend
 COPY requirements.txt /app/requirements.txt
 
 # Install dependencies
+RUN pip install --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Make sure /app is on Python path explicitly
