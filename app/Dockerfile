@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Make sure /app is on Python path explicitly
 ENV PYTHONPATH=/app
+ENV UPLOAD_DIR=/tmp/recon_uploads
 
 EXPOSE 8080
 

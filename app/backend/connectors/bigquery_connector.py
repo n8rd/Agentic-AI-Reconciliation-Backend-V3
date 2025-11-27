@@ -1,20 +1,70 @@
 import pandas as pd
-
+from typing import Optional
 try:
     from google.cloud import bigquery
 except Exception:
     bigquery = None
 
+
+def _ensure_list(val):
+    """
+    Accept:
+      - None           -> []
+      - list           -> same list
+      - comma string   -> ["col1", "col2"]
+      - anything else  -> []
+    """
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        return [c.strip() for c in val.split(",") if c.strip()]
+    return []
+
+
 class BigQueryConnector:
-    def __init__(self, project_id: str | None = None):
+    def __init__(self, project_id: Optional[str] = None):
         self.project_id = project_id
 
     def load(self, cfg: dict) -> pd.DataFrame:
+        """
+        Expected cfg shapes:
+
+        From UI (current):
+          {
+            "type": "bigquery",
+            "table": "project.dataset.table",
+            "table_fqn": "project.dataset.table",
+            "numeric_cols": [...],  # optional, not used here
+            "array_cols":   [...],  # optional, not used here
+          }
+
+        Or older style:
+          {
+            "type": "bigquery",
+            "table": "project.dataset.table",
+            "columns": ["col1", "col2"]  # or comma string
+          }
+        """
         if bigquery is None:
             raise RuntimeError("google-cloud-bigquery not installed")
+
         client = bigquery.Client(project=self.project_id)
-        table = cfg["table"]  # fully qualified `project.dataset.table` or `dataset.table`
-        cols = cfg.get("columns", ["*"])
-        sql = f"SELECT {', '.join(cols)} FROM `{table}`"
+
+        # Prefer table_fqn if present, fall back to table
+        table = cfg.get("table_fqn") or cfg.get("table")
+        if not table:
+            raise ValueError("BigQuery cfg missing 'table' or 'table_fqn'.")
+
+        # Columns: use 'columns' if provided, otherwise SELECT *
+        cols_cfg = cfg.get("columns")
+        cols = _ensure_list(cols_cfg)
+
+        if not cols:  # None, "", [] etc -> SELECT *
+            sql = f"SELECT * FROM `{table}`"
+        else:
+            sql = f"SELECT {', '.join(cols)} FROM `{table}`"
+
         df = client.query(sql).to_dataframe()
         return df

@@ -8,6 +8,13 @@ langgraph==0.2.34
 langchain-core==0.3.17
 pandas==2.2.3
 fastavro==1.9.7
-pyhive==0.7.0
+# Hive + DB connectors
+pyhive[hive]==0.7.0        # note the [hive] extra here
 psycopg2-binary==2.9.10
 oracledb==2.5.0
+SQLAlchemy==2.0.36
+thrift==0.16.0
+python-dotenv==1.0.1
+thrift_sasl==0.4.3
+sasl==0.3.1
+

@@ -7,9 +7,9 @@ from backend.agents.schema_mapper import SchemaMapperAgent
 from backend.agents.entity_resolver import EntityResolverAgent
 from backend.agents.query_synthesizer import QuerySynthesizerAgent
 from backend.agents.explanation_generator import ExplanationGeneratorAgent
-from backend.connectors.loader import DataLoader
-from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 from backend.config import settings
+from backend.data_loader import load_source_data
+from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 
 class ReconState(BaseModel):
     # input configs
@@ -29,15 +29,17 @@ class ReconState(BaseModel):
     explanation: str | None = None
     status: str | None = None
 
-loader = DataLoader()
 sm = SchemaMapperAgent()
 er = EntityResolverAgent()
 qs = QuerySynthesizerAgent()
 eg = ExplanationGeneratorAgent()
 
 def node_load(state: ReconState) -> ReconState:
-    df_a = loader.load(state.dataset_a)
-    df_b = loader.load(state.dataset_b)
+    # Use unified loader: supports file/postgres/hive/oracle/bigquery
+    df_a = load_source_data(state.dataset_a)
+    df_b = load_source_data(state.dataset_b)
+
+    # Keep only a sample in state to keep payload light
     state.df_a_sample = df_a.head(50).to_dict(orient="list")
     state.df_b_sample = df_b.head(50).to_dict(orient="list")
     return state
