@@ -16,5 +16,5 @@ SQLAlchemy==2.0.36
 thrift==0.16.0
 python-dotenv==1.0.1
 thrift_sasl==0.4.3
-sasl==0.3.1
+pure-sasl==0.6.2
 
