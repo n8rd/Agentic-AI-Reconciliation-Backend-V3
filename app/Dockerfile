@@ -1,13 +1,19 @@
 FROM python:3.11-slim
 
 # Install system dependencies required to build the 'sasl' wheel
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    gcc \
-    libkrb5-dev \
+    g++ \
+    python3-dev \
+    pkg-config \
     libsasl2-dev \
     libsasl2-modules \
+    libkrb5-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && apt-get autoremove -y
 
 # Work under /app in the container
 WORKDIR /app
