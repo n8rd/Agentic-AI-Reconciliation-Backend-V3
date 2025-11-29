@@ -136,7 +136,8 @@ def build_graph():
     g.add_edge("exec", "explain")
     g.add_edge("explain", END)
 
-    return g.compile(checkpointer=MemorySaver())
+    #return g.compile(checkpointer=MemorySaver())
+    return g.compile()
 
 graph = build_graph()
 
