@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
+#from langgraph.checkpoint.memory import MemorySaver
 
 from backend.agents.schema_mapper import SchemaMapperAgent
 from backend.agents.entity_resolver import EntityResolverAgent
@@ -10,6 +10,9 @@ from backend.agents.explanation_generator import ExplanationGeneratorAgent
 from backend.config import settings
 from backend.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
+
+import logging
+logger = logging.getLogger(__name__)
 
 class ReconState(BaseModel):
     # input configs
@@ -142,6 +145,7 @@ def build_graph():
 graph = build_graph()
 
 def run_graph(payload: dict) -> dict:
+    logger.info("RUN_GRAPH_VERSION: 2025-11-30-REV1")  # <--- marker
     state = ReconState(**payload)
     final = graph.invoke(state)
     return final.dict()
