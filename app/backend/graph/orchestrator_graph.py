@@ -8,7 +8,7 @@ from backend.agents.entity_resolver import EntityResolverAgent
 from backend.agents.query_synthesizer import QuerySynthesizerAgent
 from backend.agents.explanation_generator import ExplanationGeneratorAgent
 from backend.config import settings
-from backend.data_loader import load_source_data
+from backend.connectors.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 
 import logging
