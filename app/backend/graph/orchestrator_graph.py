@@ -146,6 +146,7 @@ graph = build_graph()
 
 def run_graph(payload: dict) -> dict:
     logger.info("Inside RUN_GRAPH")
+    logger.info("test")
     logger.info("RUN_GRAPH_VERSION: 2025-11-30-REV1")  # <--- marker
     state = ReconState(**payload)
     final = graph.invoke(state)
