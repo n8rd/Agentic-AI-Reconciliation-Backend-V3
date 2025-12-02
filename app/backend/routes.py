@@ -70,3 +70,9 @@ async def reconcile(
     result = run_graph(payload)
     # result is assumed to already be JSON serialisable
     return JSONResponse(content=result)
+
+@router.post("/reconcile/approve")
+def reconcile_approve(payload: dict):
+    state = run_graph(payload)
+    return state.dict()
+
