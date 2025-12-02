@@ -17,4 +17,7 @@ thrift==0.16.0
 python-dotenv==1.0.1
 thrift_sasl==0.4.3
 pure-sasl==0.6.2
+python-multipart==0.0.9
+google-generativeai
+google-cloud-aiplatform
 
