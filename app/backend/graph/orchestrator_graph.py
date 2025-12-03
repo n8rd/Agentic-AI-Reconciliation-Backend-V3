@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from langgraph.graph import StateGraph, START, END
 #from langgraph.checkpoint.memory import MemorySaver
+from pydantic import ValidationError
 
 from backend.agents.schema_mapper import SchemaMapperAgent
 from backend.agents.entity_resolver import EntityResolverAgent
@@ -13,6 +14,13 @@ from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 
 import logging
 logger = logging.getLogger(__name__)
+
+class ColumnMapping(BaseModel):
+    a_col: str
+    b_col: str
+
+class Approval(BaseModel):
+    approved_matches: List[ColumnMapping]
 
 class ReconState(BaseModel):
     # input configs
@@ -144,9 +152,19 @@ def build_graph():
 
 graph = build_graph()
 
-def run_graph(payload: dict) -> dict:
-    logger.info("RUN_GRAPH_VERSION: 2025-11-30-REV1")  # <--- marker
-    state = ReconState(**payload)
-    final = graph.invoke(state)
+#def run_graph(payload: dict) -> dict:
+    #logger.info("RUN_GRAPH_VERSION: 2025-11-30-REV1")  # <--- marker
+    #state = ReconState(**payload)
+    #final = graph.invoke(state)
     # AddableValuesDict -> plain dict
+    #return dict(final)
+
+def run_graph(payload: dict) -> dict:
+    logger.info("RUN_GRAPH_VERSION: 2025-12-03-REV1")
+    try:
+        state = ReconState(**payload)
+    except ValidationError as e:
+        logger.error("ReconState validation error: %s", e.json())
+        raise
+    final = graph.invoke(state)
     return dict(final)
