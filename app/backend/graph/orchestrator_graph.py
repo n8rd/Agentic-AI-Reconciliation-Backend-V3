@@ -59,15 +59,20 @@ def materialize_sources(state: ReconState) -> ReconState:
     return state
 
 def node_load(state: ReconState) -> ReconState:
-    # Use unified loader: supports file/postgres/hive/oracle/bigquery
-    df_a = load_source_data(state.dataset_a)
-    df_b = load_source_data(state.dataset_b)
+    # --- Load Dataset A ---
+    if state.dataset_a:
+        df_a = load_source_data(state.dataset_a)
+        state.data_a = df_a   # keep copy for error reporting
+        state.columns_a = df_a.columns.tolist()  # <-- NEW
+        # materialize into BigQuery after this, in materialize_sources()
 
-    # Keep only a sample in state to keep payload light
-    state.df_a_sample = df_a.head(50).to_dict(orient="list")
-    state.df_b_sample = df_b.head(50).to_dict(orient="list")
+    # --- Load Dataset B ---
+    if state.dataset_b:
+        df_b = load_source_data(state.dataset_b)
+        state.data_b = df_b
+        state.columns_b = df_b.columns.tolist()  # <-- NEW
+
     return state
-
 def node_map(state: ReconState) -> ReconState:
     """
     Run schema mapping to propose column matches.
@@ -125,9 +130,22 @@ def node_await(state: ReconState) -> ReconState:
     return state
 
 def node_entity_resolve(state: ReconState) -> ReconState:
-    ents = state.entities or []
-    state.entity_res = er.run({"entities": ents})
+    # old behavior
+    result = entity_resolver_agent.run({
+        "data_a": state.data_a,
+        "data_b": state.data_b,
+        "schema_mapping": state.schema_mapping,
+    })
+
+    state.entity_resolved = result
+
+    # --- Re-capture columns (optional) ---
+    # In case entity resolver drops, renames, or expands columns
+    state.columns_a = state.data_a.columns.tolist()
+    state.columns_b = state.data_b.columns.tolist()
+
     return state
+
 
 def node_sql(state: ReconState) -> ReconState:
     table_a = state.dataset_a.get("table_fqn", "project.dataset.table_a")
@@ -135,6 +153,7 @@ def node_sql(state: ReconState) -> ReconState:
     # numeric/array cols assumed to be provided or can be inferred
     numeric_cols = state.dataset_a.get("numeric_cols", [])
     array_cols = state.dataset_a.get("array_cols", [])
+
     out = qs.run({
         "schema_mapping": state.schema_mapping,
         "thresholds": state.thresholds,
@@ -142,7 +161,10 @@ def node_sql(state: ReconState) -> ReconState:
         "table_b": table_b,
         "numeric_cols": numeric_cols,
         "array_cols": array_cols,
+        "columns_a": state.columns_a,  # <-- NEW
+        "columns_b": state.columns_b,  # <-- NEW
     })
+
     state.sql = out["sql"]
     return state
 
