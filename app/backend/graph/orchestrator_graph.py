@@ -170,9 +170,10 @@ def node_explain(state: ReconState) -> ReconState:
 
 def build_graph():
     g = StateGraph(ReconState)
-    g.add_node("materialize_sources", materialize_sources)
-    # START -> materialize_sources -> schema_mapper -> entity_resolver -> query_synthesizer ...
+
+    # Nodes
     g.add_node("load", node_load)
+    g.add_node("materialize_sources", materialize_sources)  # <-- stays
     g.add_node("map", node_map)
     g.add_node("approval_node", node_approval)
     g.add_node("await", node_await)
@@ -181,11 +182,15 @@ def build_graph():
     g.add_node("exec", node_exec)
     g.add_node("explain", node_explain)
 
+    # Edges
     g.add_edge(START, "load")
-    g.add_edge("load", "map")
+
+    # Insert materialize_sources between load and map
+    g.add_edge("load", "materialize_sources")
+    g.add_edge("materialize_sources", "map")
+
     g.add_edge("map", "approval_node")
 
-    # Updated: only two branches — APPROVED vs WAIT
     g.add_conditional_edges(
         "approval_node",
         decide_after_approval,
@@ -197,6 +202,7 @@ def build_graph():
 
     g.add_edge("await", END)
     g.add_edge("entity_resolve", "sql_node")
+
     g.add_conditional_edges(
         "sql_node",
         decide_after_sql,
@@ -205,6 +211,7 @@ def build_graph():
             "explain": "explain",
         },
     )
+
     g.add_edge("exec", "explain")
     g.add_edge("explain", END)
 
