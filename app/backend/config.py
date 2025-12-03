@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     vertex_location: str = "us-central1"
     gemini_model: str = "gemini-1.5-pro"
 
+    BQ_STAGING_DATASET: str = "recon_staging"  # set via env var in Cloud Run
+
     class Config:
         env_file = ".env"
 

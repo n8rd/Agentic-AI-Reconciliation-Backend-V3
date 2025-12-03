@@ -9,6 +9,7 @@ from backend.agents.explanation_generator import ExplanationGeneratorAgent
 from backend.config import settings
 from backend.connectors.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
+from backend.data_loader import materialize_to_bigquery
 
 import logging
 logger = logging.getLogger(__name__)
@@ -43,6 +44,19 @@ sm = SchemaMapperAgent()
 er = EntityResolverAgent()
 qs = QuerySynthesizerAgent()
 eg = ExplanationGeneratorAgent()
+
+def materialize_sources(state: ReconState) -> ReconState:
+    # Dataset A
+    if state.dataset_a:
+        fqn_a = materialize_to_bigquery(state.dataset_a, "a")
+        state.dataset_a["table_fqn"] = fqn_a
+
+    # Dataset B
+    if state.dataset_b:
+        fqn_b = materialize_to_bigquery(state.dataset_b, "b")
+        state.dataset_b["table_fqn"] = fqn_b
+
+    return state
 
 def node_load(state: ReconState) -> ReconState:
     # Use unified loader: supports file/postgres/hive/oracle/bigquery
@@ -156,6 +170,8 @@ def node_explain(state: ReconState) -> ReconState:
 
 def build_graph():
     g = StateGraph(ReconState)
+    graph.add_node("materialize_sources", materialize_sources)
+    # START -> materialize_sources -> schema_mapper -> entity_resolver -> query_synthesizer ...
     g.add_node("load", node_load)
     g.add_node("map", node_map)
     g.add_node("approval_node", node_approval)
