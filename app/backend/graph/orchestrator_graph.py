@@ -9,7 +9,7 @@ from backend.agents.explanation_generator import ExplanationGeneratorAgent
 from backend.config import settings
 from backend.connectors.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
-from backend.data_loader import materialize_to_bigquery
+from backend.connectors.data_loader import materialize_to_bigquery
 
 import logging
 logger = logging.getLogger(__name__)
