@@ -47,6 +47,9 @@ class ReconState(BaseModel):
     columns_a: List[str] | None = None
     columns_b: List[str] | None = None
 
+    result_df: Any | None = None     # internal only
+    result: Any | None = None        # JSON serializable output
+
 sm = SchemaMapperAgent()
 er = EntityResolverAgent()
 qs = QuerySynthesizerAgent()
@@ -186,8 +189,11 @@ def node_exec(state: ReconState) -> ReconState:
         return state
     client = bigquery.Client(project=settings.google_project_id)
     job = client.query(state.sql)
-    res = job.result()
-    state.bq_status = f"{res.total_rows} rows processed"
+    res_df = job.result().to_dataframe()
+    state.result_df = res_df
+    # Convert for final JSON output
+    state.result = res_df.to_dict(orient="records")
+    state.bq_status = f"{job.result().total_rows} rows processed"
     return state
 
 def node_explain(state: ReconState) -> ReconState:
@@ -256,4 +262,13 @@ def run_graph(payload: dict) -> dict:
         logger.error("ReconState validation error: %s", e.json())
         raise
     final = graph.invoke(state)
-    return dict(final)
+
+    # Drop large non-serializable fields
+    final.data_a = None
+    final.data_b = None
+
+    # Convert result_df to JSON-safe format
+    if hasattr(final, "result_df") and final.result_df is not None:
+        final.result = final.result_df.to_dict(orient="records")
+        final.result_df = None
+    return final.dict()
