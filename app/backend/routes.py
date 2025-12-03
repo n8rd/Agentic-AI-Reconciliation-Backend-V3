@@ -73,6 +73,5 @@ async def reconcile(
 
 @router.post("/reconcile/approve")
 def reconcile_approve(payload: dict):
-    state = run_graph(payload)
-    return state.dict()
-
+    result = run_graph(payload)   # result is already a dict
+    return result                 # FastAPI will serialize it to JSON
