@@ -158,25 +158,27 @@ def node_entity_resolve(state: ReconState) -> ReconState:
 
 
 def node_sql(state: ReconState) -> ReconState:
-    table_a = state.dataset_a.get("table_fqn", "project.dataset.table_a")
-    table_b = state.dataset_b.get("table_fqn", "project.dataset.table_b")
-    # numeric/array cols assumed to be provided or can be inferred
-    numeric_cols = state.dataset_a.get("numeric_cols", [])
-    array_cols = state.dataset_a.get("array_cols", [])
+    # We expect materialize_sources to have set table_fqn for both datasets.
+    table_a = state.dataset_a.get("table_fqn") if state.dataset_a else None
+    table_b = state.dataset_b.get("table_fqn") if state.dataset_b else None
 
-    out = qs.run({
+    if not table_a or not table_b:
+        raise ValueError("table_fqn must be set for dataset_a and dataset_b before SQL synthesis")
+
+    payload = {
         "schema_mapping": state.schema_mapping,
         "thresholds": state.thresholds,
         "table_a": table_a,
         "table_b": table_b,
-        "numeric_cols": numeric_cols,
-        "array_cols": array_cols,
-        "columns_a": state.columns_a,  # <-- NEW
-        "columns_b": state.columns_b,  # <-- NEW
-    })
+        # critical: real columns from loaded DataFrames
+        "columns_a": state.columns_a or [],
+        "columns_b": state.columns_b or [],
+    }
 
+    out = qs.run(payload)  # qs = QuerySynthesizerAgent instance
     state.sql = out["sql"]
     return state
+
 
 def decide_after_sql(state: ReconState):
     if state.sql and "SELECT" in state.sql.upper():
