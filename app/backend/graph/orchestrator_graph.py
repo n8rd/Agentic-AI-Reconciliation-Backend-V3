@@ -1,8 +1,6 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Optional, List, Dict, Any
 from langgraph.graph import StateGraph, START, END
-#from langgraph.checkpoint.memory import MemorySaver
-from pydantic import ValidationError
 
 from backend.agents.schema_mapper import SchemaMapperAgent
 from backend.agents.entity_resolver import EntityResolverAgent
@@ -30,6 +28,7 @@ class ReconState(BaseModel):
     entities: List[str] | None = None
     # "approval": { "approved_matches": [ { "a_col": "...", "b_col": "..." }, ... ] }
     approval: Optional[Approval] = None
+
     # internal / results
     df_a_sample: Any | None = None
     df_b_sample: Any | None = None
@@ -56,25 +55,55 @@ def node_load(state: ReconState) -> ReconState:
     return state
 
 def node_map(state: ReconState) -> ReconState:
+    """
+    Run schema mapping to propose column matches.
+    We DO NOT set PENDING_APPROVAL here anymore; that happens in node_approval.
+    """
     import pandas as pd
     df_a = pd.DataFrame(state.df_a_sample)
     df_b = pd.DataFrame(state.df_b_sample)
     state.schema_mapping = sm.run({"df_a": df_a, "df_b": df_b})
-    state.status = "PENDING_APPROVAL"
     return state
 
 def node_approval(state: ReconState) -> ReconState:
-    if state.approval == "approve":
-        state.status = "APPROVED"
-    elif state.approval == "revise":
-        state.status = "REVISE_REQUESTED"
+    """
+    HITL checkpoint:
+    - First call (/reconcile): no approval yet -> mark PENDING_APPROVAL.
+    - Second call (/reconcile/approve): approval present -> filter mappings and mark APPROVED.
+    """
+    if state.approval is None:
+        # No approval from client yet: stop after this node
+        state.status = "PENDING_APPROVAL"
+        return state
+
+    # We have an Approval object with approved_matches.
+    # Filter schema_mapping.matches to only keep approved pairs.
+    try:
+        approved_pairs = {
+            (m.a_col, m.b_col) for m in state.approval.approved_matches
+        }
+        if state.schema_mapping and "matches" in state.schema_mapping:
+            original_matches = state.schema_mapping["matches"]
+            state.schema_mapping["matches"] = [
+                m
+                for m in original_matches
+                if (m.get("a_col"), m.get("b_col")) in approved_pairs
+            ]
+    except Exception as e:
+        logger.error("Error applying approval to schema_mapping: %s", e)
+
+    state.status = "APPROVED"
     return state
 
 def decide_after_approval(state: ReconState):
+    """
+    Route based on approval status:
+    - APPROVED -> continue pipeline (entity_resolve)
+    - PENDING_APPROVAL (or anything else) -> await client input
+    """
     if state.status == "APPROVED":
         return "entity_resolve"
-    if state.status == "REVISE_REQUESTED":
-        return "map"
+    # default: wait for client to inspect mapping and call again
     return "await"
 
 def node_await(state: ReconState) -> ReconState:
@@ -121,7 +150,8 @@ def node_exec(state: ReconState) -> ReconState:
 def node_explain(state: ReconState) -> ReconState:
     out = eg.run({"sql": state.sql, "bq_status": state.bq_status})
     state.explanation = out["explanation"]
-    state.status = state.status or "DONE"
+    # Final status for the full pipeline
+    state.status = "DONE"
     return state
 
 def build_graph():
@@ -138,26 +168,33 @@ def build_graph():
     g.add_edge(START, "load")
     g.add_edge("load", "map")
     g.add_edge("map", "approval_node")
-    g.add_conditional_edges("approval_node", decide_after_approval,
-                            {"entity_resolve": "entity_resolve", "map": "map", "await": "await"})
+
+    # Updated: only two branches — APPROVED vs WAIT
+    g.add_conditional_edges(
+        "approval_node",
+        decide_after_approval,
+        {
+            "entity_resolve": "entity_resolve",
+            "await": "await",
+        },
+    )
+
     g.add_edge("await", END)
     g.add_edge("entity_resolve", "sql_node")
-    g.add_conditional_edges("sql_node", decide_after_sql,
-                            {"exec": "exec", "explain": "explain"})
+    g.add_conditional_edges(
+        "sql_node",
+        decide_after_sql,
+        {
+            "exec": "exec",
+            "explain": "explain",
+        },
+    )
     g.add_edge("exec", "explain")
     g.add_edge("explain", END)
 
-    #return g.compile(checkpointer=MemorySaver())
     return g.compile()
 
 graph = build_graph()
-
-#def run_graph(payload: dict) -> dict:
-    #logger.info("RUN_GRAPH_VERSION: 2025-11-30-REV1")  # <--- marker
-    #state = ReconState(**payload)
-    #final = graph.invoke(state)
-    # AddableValuesDict -> plain dict
-    #return dict(final)
 
 def run_graph(payload: dict) -> dict:
     logger.info("RUN_GRAPH_VERSION: 2025-12-03-REV1")
