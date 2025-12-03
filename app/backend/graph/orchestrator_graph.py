@@ -39,6 +39,13 @@ class ReconState(BaseModel):
     bq_status: str | None = None
     explanation: str | None = None
     status: str | None = None
+    # --- NEW: STORE RAW DATAFRAMES FOR JOIN-KEY VALIDATION ---
+    data_a: Any | None = None
+    data_b: Any | None = None
+
+    # --- NEW: STORE COLUMN LISTS ---
+    columns_a: List[str] | None = None
+    columns_b: List[str] | None = None
 
 sm = SchemaMapperAgent()
 er = EntityResolverAgent()
