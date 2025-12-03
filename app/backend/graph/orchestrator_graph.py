@@ -170,7 +170,7 @@ def node_explain(state: ReconState) -> ReconState:
 
 def build_graph():
     g = StateGraph(ReconState)
-    graph.add_node("materialize_sources", materialize_sources)
+    g.add_node("materialize_sources", materialize_sources)
     # START -> materialize_sources -> schema_mapper -> entity_resolver -> query_synthesizer ...
     g.add_node("load", node_load)
     g.add_node("map", node_map)
