@@ -28,8 +28,8 @@ class ReconState(BaseModel):
     dataset_b: Dict[str, Any] | None = None
     thresholds: Dict[str, Any] = {"abs": 0.01, "rel": 0.001}
     entities: List[str] | None = None
-    approval: Optional[str] = None
-
+    # "approval": { "approved_matches": [ { "a_col": "...", "b_col": "..." }, ... ] }
+    approval: Optional[Approval] = None
     # internal / results
     df_a_sample: Any | None = None
     df_b_sample: Any | None = None
