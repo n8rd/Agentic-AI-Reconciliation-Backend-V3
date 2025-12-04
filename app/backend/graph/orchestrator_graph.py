@@ -11,6 +11,9 @@ from backend.connectors.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 from backend.connectors.data_loader import materialize_to_bigquery
 
+import pandas as pd
+from collections.abc import Mapping
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -257,26 +260,37 @@ def build_graph():
 graph = build_graph()
 
 def run_graph(payload: dict) -> dict:
-    logger.info("RUN_GRAPH_VERSION: 2025-12-03-REV1")
+    logger.info("RUN_GRAPH_VERSION: 2025-12-03-REV2")
     try:
         state = ReconState(**payload)
     except ValidationError as e:
         logger.error("ReconState validation error: %s", e.json())
         raise
+
     final = graph.invoke(state)
 
-    # Drop large non-serializable fields
-    final.data_a = None
-    final.data_b = None
+    # 1) Normalize to a plain dict
+    if hasattr(final, "dict"):  # Pydantic ReconState
+        raw = final.dict()
+    else:  # AddableValuesDict or other mapping-like
+        try:
+            raw = dict(final)
+        except TypeError:
+            # Fallback – should not usually happen
+            raw = final
 
-    # Convert result_df to JSON-safe format
-    if hasattr(final, "result_df") and final.result_df is not None:
-        final.result = final.result_df.to_dict(orient="records")
-        final.result_df = None
+    # 2) Strip/convert non-serializable values (DataFrames)
+    clean: dict = {}
 
-    # If LangGraph still returns a Pydantic ReconState, keep old behaviour
-    if hasattr(final, "dict"):
-        return final.dict()
+    for key, value in raw.items():
+        # Handle DataFrames specially
+        if isinstance(value, pd.DataFrame):
+            # Convert result_df → result (list of records)
+            if key == "result_df":
+                clean["result"] = value.to_dict(orient="records")
+            # Drop all other DataFrame fields (data_a, data_b, df_a, df_b, etc.)
+            continue
 
-    # Newer LangGraph returns AddableValuesDict (a dict-like state)
-    return dict(final)
+        clean[key] = value
+
+    return clean
