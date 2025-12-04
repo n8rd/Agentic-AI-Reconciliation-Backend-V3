@@ -26,8 +26,13 @@ class SchemaMapperAgent(BaseAgent):
     """
 
     def run(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df_a: pd.DataFrame = data["data_a"]
-        df_b: pd.DataFrame = data["data_b"]
+        df_a: pd.DataFrame | None = data.get("df_a") or data.get("data_a")
+        df_b: pd.DataFrame | None = data.get("df_b") or data.get("data_b")
+
+        if df_a is None or df_b is None:
+            raise ValueError(
+                "SchemaMapperAgent.run expects 'df_a'/'df_b' or 'data_a'/'data_b' in the input data."
+            )
 
         cols_a = df_a.columns.tolist()
         cols_b = df_b.columns.tolist()
