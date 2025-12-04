@@ -8,8 +8,8 @@ import pandas as pd
 from .base_agent import BaseAgent
 from backend.utils.similarity import name_similarity
 from backend.utils.similarity import normalize
-
-from langchain_core.messages import HumanMessage
+from backend.providers.factory import get_llm_provider
+#from langchain_core.messages import HumanMessage
 
 
 LLM_THRESHOLD = 0.65      # Used for deterministic fallback
@@ -24,6 +24,11 @@ class SchemaMapperAgent(BaseAgent):
       3. Combines results and enforces type correctness
       4. Produces stable, BigQuery-safe mapping
     """
+    def __init__(self):
+        super().__init__()
+        # use the provider factory – this stays extensible (openai / gemini / mock)
+        self.llm = get_llm_provider()
+
 
     def run(self, data: Dict[str, Any]) -> Dict[str, Any]:
         # Support both df_a/df_b and data_a/data_b
@@ -45,10 +50,6 @@ class SchemaMapperAgent(BaseAgent):
                 "SchemaMapperAgent.run expects key 'df_b' or 'data_b' in input data."
             )
 
-        if df_a is None or df_b is None:
-            raise ValueError(
-                "SchemaMapperAgent.run expects 'df_a'/'df_b' or 'data_a'/'data_b' in the input data."
-            )
 
         cols_a = df_a.columns.tolist()
         cols_b = df_b.columns.tolist()
@@ -74,8 +75,12 @@ class SchemaMapperAgent(BaseAgent):
             "[{\"a\": \"colA\", \"b\": \"colB\", \"confidence\": 0.0 }, ...]"
         )
 
-        llm_response = self.llm.invoke([HumanMessage(content=llm_prompt)])
-        llm_pairs = self._safe_extract_llm_pairs(llm_response.content)
+        #llm_response = self.llm.invoke([HumanMessage(content=llm_prompt)])
+        #llm_pairs = self._safe_extract_llm_pairs(llm_response.content)
+
+        # Call the provider abstraction
+        raw_text = self.llm.chat(llm_prompt)
+        llm_pairs = self._safe_extract_llm_pairs(raw_text)
 
         # index LLM suggestions
         llm_map = {(p["a"], p["b"]): p["confidence"] for p in llm_pairs}
