@@ -448,7 +448,7 @@ def build_graph():
 graph = build_graph()
 
 def run_graph(payload: dict) -> dict:
-    logger.info("RUN_GRAPH_VERSION: 2025-12-04-REV2")
+    logger.info("RUN_GRAPH_VERSION: 2025-12-04-REV3")
 
     try:
         state = ReconState(**payload)
@@ -456,29 +456,56 @@ def run_graph(payload: dict) -> dict:
         logger.error("ReconState validation error: %s", e.json())
         raise
 
+    # Run the graph →
     final = graph.invoke(state)
 
-    # Remove large non-serializable state variables
-    if hasattr(final, "data_a"):
-        final.data_a = None
-    if hasattr(final, "data_b"):
-        final.data_b = None
+    # ---------------------------------------------------------
+    # REMOVE ALL DATAFRAMES (any possible location)
+    # ---------------------------------------------------------
 
-    # Convert result_df to JSON-safe list of dictionaries
-    if hasattr(final, "result_df") and final.result_df is not None:
+    # Remove full DataFrames
+    for attr in ["data_a", "data_b", "df_a_sample", "df_b_sample",
+                 "result_df", "entity_resolved"]:
+        if hasattr(final, attr):
+            val = getattr(final, attr)
+            if isinstance(val, pd.DataFrame):
+                setattr(final, attr, None)
+            elif isinstance(val, dict):
+                # If dict contains DFs (entity_resolved often does)
+                for k, v in list(val.items()):
+                    if isinstance(v, pd.DataFrame):
+                        val[k] = None
+                setattr(final, attr, val)
+
+    # Convert result_df → result list
+    if hasattr(final, "result_df") and isinstance(final.result_df, pd.DataFrame):
         try:
             final.result = final.result_df.to_dict(orient="records")
         except Exception as e:
-            logger.error("[run_graph] result_df conversion failed: %s", e)
+            logger.error("[run_graph] DF → JSON conversion failed: %s", e)
             final.result = []
         final.result_df = None
 
-    # Pydantic model
-    if hasattr(final, "dict"):
-        return final.dict()
+    # ---------------------------------------------------------
+    # Handle Pydantic vs AddableValuesDict
+    # ---------------------------------------------------------
 
-    # AddableValuesDict → convert to dict
-    d = dict(final)
-    if "result_df" in d:
-        d["result_df"] = None
-    return d
+    if hasattr(final, "dict"):
+        result = final.dict()
+    else:
+        result = dict(final)
+
+    # Absolute safety: RE-SCAN for any leftover DataFrames (deep)
+    def df_sanitizer(obj):
+        if isinstance(obj, pd.DataFrame):
+            return None
+        if isinstance(obj, list):
+            return [df_sanitizer(x) for x in obj]
+        if isinstance(obj, dict):
+            return {k: df_sanitizer(v) for k, v in obj.items()}
+        return obj
+
+    result = df_sanitizer(result)
+
+    return result
+
