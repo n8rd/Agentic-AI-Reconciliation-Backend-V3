@@ -68,9 +68,17 @@ def materialize_to_bigquery(cfg: Dict, label: str) -> str:
         raise ValueError("BQ_STAGING_DATASET must be configured")
 
     table_name = f"{label}_{uuid.uuid4().hex[:8]}"
-    table_fqn = bigquery_connector.load_dataframe_to_table(df, dataset, table_name)
 
-    # Optionally, stash this so downstream agents can see it
+    # --------------------------------------------------------
+    # NEW: ensure dataset exists before loading DF
+    # --------------------------------------------------------
+    bigquery_connector.ensure_dataset(dataset)
+
+    # Upload DataFrame into auto-created staging table
+    table_fqn = bigquery_connector.load_dataframe_to_table(
+        df, dataset, table_name
+    )
+
     cfg["table_fqn"] = table_fqn
-
     return table_fqn
+

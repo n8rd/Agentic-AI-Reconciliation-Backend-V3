@@ -235,33 +235,19 @@ def node_entity_resolve(state: ReconState) -> ReconState:
 
 def node_sql(state: ReconState) -> ReconState:
     """
-    Use QuerySynthesizerAgent to build the reconciliation SQL
-    and execute it on BigQuery, populating state.sql and state.result_df.
+    Node: SQL Synthesis
+    Use QuerySynthesizerAgent to produce the reconciliation SQL.
+    Does NOT execute SQL (that's node_exec).
     """
 
-    # Defensive: dataset configs must exist
-    if not state.dataset_a or not state.dataset_b:
-        logger.error("node_sql: dataset_a or dataset_b missing on state")
-        state.sql = None
-        state.result_df = None
-        return state
+    logger.info("[node_sql] Starting SQL synthesis")
 
-    # Table FQNs produced by node_load/file loader
-    table_a = state.dataset_a.get("table_fqn")
-    table_b = state.dataset_b.get("table_fqn")
-
-    # Schema mapping-derived types
     schema_mapping = state.schema_mapping or {}
     numeric_cols = schema_mapping.get("numeric_cols", [])
     array_cols = schema_mapping.get("array_cols", [])
 
-    # Columns discovered earlier
-    columns_a = getattr(state, "columns_a", [])
-    columns_b = getattr(state, "columns_b", [])
-
-    # Entities and approval from UI
-    entities = getattr(state, "entities", []) or []
-    approval = getattr(state, "approval", None)
+    table_a = state.dataset_a.get("table_fqn")
+    table_b = state.dataset_b.get("table_fqn")
 
     qs_payload = {
         "schema_mapping": schema_mapping,
@@ -270,40 +256,33 @@ def node_sql(state: ReconState) -> ReconState:
         "table_b": table_b,
         "numeric_cols": numeric_cols,
         "array_cols": array_cols,
-        "columns_a": columns_a,
-        "columns_b": columns_b,
-        "entities": entities,
-        "approval": approval,
+        "columns_a": getattr(state, "columns_a", []),
+        "columns_b": getattr(state, "columns_b", []),
+        "entities": getattr(state, "entities", []) or [],
+        "approval": getattr(state, "approval", None),
     }
 
-    # Let the agent synthesize SQL
-    qs_result = qs.run(qs_payload)
+    logger.info("[node_sql] Invoking QuerySynthesizerAgent with payload keys: %s",
+                list(qs_payload.keys()))
+
+    try:
+        result = qs.run(qs_payload)
+    except Exception as e:
+        logger.error("[node_sql] QuerySynthesizerAgent failed: %s", e, exc_info=True)
+        raise
 
     sql = None
-    if isinstance(qs_result, dict):
-        sql = qs_result.get("sql")
+    if isinstance(result, dict):
+        sql = result.get("sql")
 
     if not sql:
-        logger.error("node_sql: QuerySynthesizerAgent did not return SQL")
-        state.sql = None
-        state.result_df = None
-        return state
+        raise RuntimeError("[node_sql] Synthesized SQL is empty!")
+
+    logger.info("[node_sql] SQL synthesis complete (first 200 chars):\n%s",
+                sql[:200])
 
     state.sql = sql
-
-    # Execute SQL on BigQuery and store DataFrame on state
-    try:
-        bq = BigQueryConnector(bigquery)
-        df = bq.run_query_to_df(sql)
-    except Exception as e:
-        logger.error("node_sql: error executing BigQuery SQL: %s", e, exc_info=True)
-        state.result_df = None
-        return state
-
-    state.result_df = df
     return state
-
-
 
 def decide_after_sql(state: ReconState) -> str:
     """
@@ -326,16 +305,40 @@ def decide_after_sql(state: ReconState) -> str:
 
 
 def node_exec(state: ReconState) -> ReconState:
-    if bigquery is None or not settings.google_project_id:
-        state.bq_status = "SKIPPED_NO_BQ"
+    """
+    Node: Execute SQL on BigQuery.
+    Stores DataFrame in state.result_df.
+    """
+
+    sql = state.sql
+    if not sql:
+        logger.error("[node_exec] No SQL provided in state.sql")
+        state.result_df = None
         return state
-    client = bigquery.Client(project=settings.google_project_id)
-    job = client.query(state.sql)
-    res_df = job.result().to_dataframe()
-    state.result_df = res_df
-    # Convert for final JSON output
-    state.result = res_df.to_dict(orient="records")
-    state.bq_status = f"{job.result().total_rows} rows processed"
+
+    logger.info("[node_exec] Running SQL on BigQuery...")
+
+    from backend.connectors.bigquery_connector import BigQueryConnector
+    from backend.config import settings
+
+    logger.info("[node_exec] Project: %s", settings.gcp_project_id)
+    logger.info("[node_exec] SQL length: %s chars", len(sql))
+
+    bq = BigQueryConnector(project_id=settings.gcp_project_id)
+
+    try:
+        df = bq.run_query(sql)
+        logger.info("[node_exec] BQ query completed. Rows fetched: %s", len(df))
+        logger.info("[node_exec] Columns: %s", list(df.columns))
+        logger.info("[node_exec] Sample row: %s", df.head(1).to_dict(orient="records"))
+
+    except Exception as e:
+        logger.error("[node_exec] Error executing BigQuery SQL: %s",
+                     e, exc_info=True)
+        state.result_df = None
+        return state
+
+    state.result_df = df
     return state
 
 def node_explain(state: ReconState) -> ReconState:
@@ -445,7 +448,8 @@ def build_graph():
 graph = build_graph()
 
 def run_graph(payload: dict) -> dict:
-    logger.info("RUN_GRAPH_VERSION: 2025-12-03-REV2")
+    logger.info("RUN_GRAPH_VERSION: 2025-12-04-REV2")
+
     try:
         state = ReconState(**payload)
     except ValidationError as e:
@@ -454,34 +458,27 @@ def run_graph(payload: dict) -> dict:
 
     final = graph.invoke(state)
 
-    # 1) Normalize to a plain dict
-    # Normalize to a dict (ReconState or AddableValuesDict)
-    if isinstance(final, ReconState):
-        if hasattr(final, "dict"):  # Pydantic ReconState
-            raw = final.dict()
-        else:  # AddableValuesDict or other mapping-like
-            try:
-                raw = dict(final)
-            except TypeError:
-                # Fallback – should not usually happen
-                raw = final
+    # Remove large non-serializable state variables
+    if hasattr(final, "data_a"):
+        final.data_a = None
+    if hasattr(final, "data_b"):
+        final.data_b = None
 
-    else:
-        raw = dict(final)
+    # Convert result_df to JSON-safe list of dictionaries
+    if hasattr(final, "result_df") and final.result_df is not None:
+        try:
+            final.result = final.result_df.to_dict(orient="records")
+        except Exception as e:
+            logger.error("[run_graph] result_df conversion failed: %s", e)
+            final.result = []
+        final.result_df = None
 
+    # Pydantic model
+    if hasattr(final, "dict"):
+        return final.dict()
 
-    # 2) Strip/convert non-serializable values (DataFrames)
-    clean: dict = {}
-
-    for key, value in raw.items():
-        # Handle DataFrames specially
-        if isinstance(value, pd.DataFrame):
-            # Convert result_df → result (list of records)
-            if key == "result_df":
-                clean["result"] = value.to_dict(orient="records")
-            # Drop all other DataFrame fields (data_a, data_b, df_a, df_b, etc.)
-            continue
-
-        clean[key] = value
-
-    return clean
+    # AddableValuesDict → convert to dict
+    d = dict(final)
+    if "result_df" in d:
+        d["result_df"] = None
+    return d

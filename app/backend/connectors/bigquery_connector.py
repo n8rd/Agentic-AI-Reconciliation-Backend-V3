@@ -24,17 +24,57 @@ def _ensure_list(val):
 
 
 class BigQueryConnector:
-    def __init__(self, project_id: Optional[str] = None):
-        self.project_id = project_id
+    """
+    Unified BigQuery connector used by:
+      - materialize_sources (table load)
+      - node_sql / node_exec (recon SQL execution)
+      - file upload loaders (load_dataframe_to_table)
+    """
 
+    def __init__(self, project_id: Optional[str] = None):
+        """
+        project_id:
+          - None → default project from Cloud Run service account
+          - string → explicit project
+        """
+        self.project_id = project_id
+        self.client = None   # lazy init
+
+    # -----------------------------------------------------
+    # Lazy BigQuery client creation
+    # -----------------------------------------------------
     def _client(self):
+        if self.client is not None:
+            return self.client
+
         if bigquery is None:
             raise RuntimeError("google-cloud-bigquery not installed")
-        return bigquery.Client(project=self.project_id)
 
+        self.client = bigquery.Client(project=self.project_id)
+        return self.client
+
+    # -----------------------------------------------------
+    # Core execution used by node_exec
+    # -----------------------------------------------------
+    def run_query(self, query: str) -> pd.DataFrame:
+        client = self._client()
+        job = client.query(query)
+        return job.result().to_dataframe()
+
+    # Backwards compatible alias
+    def run_query_to_df(self, query: str) -> pd.DataFrame:
+        return self.run_query(query)
+
+    # -----------------------------------------------------
+    # Load an existing BigQuery table into a DataFrame
+    # -----------------------------------------------------
     def load(self, cfg: dict) -> pd.DataFrame:
         """
-        Load from an existing BigQuery table (no change from your current behavior).
+        Load selected columns from an existing BigQuery table.
+        cfg = {
+            "table_fqn": "project.dataset.table",
+            "columns": ["colA", "colB"]
+        }
         """
         client = self._client()
 
@@ -50,18 +90,52 @@ class BigQueryConnector:
         else:
             sql = f"SELECT {', '.join(cols)} FROM `{table}`"
 
-        df = client.query(sql).to_dataframe()
-        return df
+        return client.query(sql).to_dataframe()
 
+    # -----------------------------------------------------
+    # Upload a DataFrame to BigQuery (used for file sources)
+    # -----------------------------------------------------
     def load_dataframe_to_table(self, df: pd.DataFrame, dataset: str, table: str) -> str:
         """
-        Upload a pandas DataFrame into BigQuery as dataset.table.
-        Returns fully-qualified table id.
+        Upload a pandas DataFrame into BigQuery:
+            RETURN: "project.dataset.table"
+        """
+        client = self._client()
+
+        project = client.project
+        table_id = f"{project}.{dataset}.{table}"
+
+        load_job = client.load_table_from_dataframe(df, table_id)
+        load_job.result()  # wait for load completion
+
+        return table_id
+
+    def ensure_dataset(self, dataset: str):
+        """
+        Create the dataset if it doesn't exist.
+        """
+        client = self._client()
+        try:
+            client.get_dataset(dataset)
+        except Exception:
+            logger.info("[BigQueryConnector] Creating dataset: %s", dataset)
+            client.create_dataset(dataset)
+
+    def ensure_table(self, dataset: str, table: str, schema=None):
+        """
+        Create table if missing. schema = list[bigquery.SchemaField]
         """
         client = self._client()
         table_id = f"{client.project}.{dataset}.{table}"
 
-        job = client.load_table_from_dataframe(df, table_id)
-        job.result()  # wait for load to finish
+        try:
+            client.get_table(table_id)
+            return table_id
+        except Exception:
+            pass
 
+        logger.info("[BigQueryConnector] Creating table: %s", table_id)
+        table_obj = bigquery.Table(table_id, schema=schema)
+        client.create_table(table_obj)
         return table_id
+
