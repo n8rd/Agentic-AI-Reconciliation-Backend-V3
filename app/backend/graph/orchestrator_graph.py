@@ -273,4 +273,10 @@ def run_graph(payload: dict) -> dict:
     if hasattr(final, "result_df") and final.result_df is not None:
         final.result = final.result_df.to_dict(orient="records")
         final.result_df = None
-    return final.dict()
+
+    # If LangGraph still returns a Pydantic ReconState, keep old behaviour
+    if hasattr(final, "dict"):
+        return final.dict()
+
+    # Newer LangGraph returns AddableValuesDict (a dict-like state)
+    return dict(final)
