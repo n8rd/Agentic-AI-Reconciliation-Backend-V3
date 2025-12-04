@@ -321,10 +321,10 @@ def node_exec(state: ReconState) -> ReconState:
     from backend.connectors.bigquery_connector import BigQueryConnector
     from backend.config import settings
 
-    logger.info("[node_exec] Project: %s", settings.gcp_project_id)
+    logger.info("[node_exec] Project: %s", settings.google_project_id)
     logger.info("[node_exec] SQL length: %s chars", len(sql))
 
-    bq = BigQueryConnector(project_id=settings.gcp_project_id)
+    bq = BigQueryConnector(project_id=settings.google_project_id)
 
     try:
         df = bq.run_query(sql)
