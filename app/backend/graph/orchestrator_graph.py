@@ -43,6 +43,9 @@ class ReconState(BaseModel):
     bq_status: str | None = None
     explanation: str | None = None
     status: str | None = None
+
+    entity_resolved: Dict[str, Any] | None = None
+
     # --- NEW: STORE RAW DATAFRAMES FOR JOIN-KEY VALIDATION ---
     data_a: Any | None = None
     data_b: Any | None = None
