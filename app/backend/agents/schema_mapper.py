@@ -26,8 +26,24 @@ class SchemaMapperAgent(BaseAgent):
     """
 
     def run(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        df_a: pd.DataFrame | None = data.get("df_a") or data.get("data_a")
-        df_b: pd.DataFrame | None = data.get("df_b") or data.get("data_b")
+        # Support both df_a/df_b and data_a/data_b
+        if "df_a" in data:
+            df_a = data["df_a"]
+        elif "data_a" in data:
+            df_a = data["data_a"]
+        else:
+            raise ValueError(
+                "SchemaMapperAgent.run expects key 'df_a' or 'data_a' in input data."
+            )
+
+        if "df_b" in data:
+            df_b = data["df_b"]
+        elif "data_b" in data:
+            df_b = data["data_b"]
+        else:
+            raise ValueError(
+                "SchemaMapperAgent.run expects key 'df_b' or 'data_b' in input data."
+            )
 
         if df_a is None or df_b is None:
             raise ValueError(
