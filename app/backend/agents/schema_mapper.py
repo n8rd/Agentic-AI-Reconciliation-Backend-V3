@@ -96,14 +96,14 @@ class SchemaMapperAgent(BaseAgent):
         )
 
         try:
-            raw_text = self.llm.chat(llm_prompt)  # uses providers/factory + .chat()
+            raw_text = self.llm.chat(llm_prompt)
         except Exception as e:
             logger.error("SchemaMapperAgent LLM error: %s", e, exc_info=True)
             raw_text = ""
 
         llm_pairs = self._safe_extract_llm_pairs(raw_text)
 
-        # index LLM suggestions (still used elsewhere; keep it)
+        # index LLM suggestions (kept for any other usage)
         llm_map = {(p["a"], p["b"]): p["confidence"] for p in llm_pairs}
 
         # -------------------------------------------------------
@@ -120,9 +120,11 @@ class SchemaMapperAgent(BaseAgent):
                     best_score = s
 
             if best_b and best_score >= LLM_THRESHOLD:
-                det_candidates.append(
-                    {"a": a_col, "b": best_b, "confidence": best_score}
-                )
+                det_candidates.append({
+                    "a": a_col,
+                    "b": best_b,
+                    "confidence": best_score,
+                })
 
         # -------------------------------------------------------
         # 3) Merge LLM + deterministic
@@ -144,26 +146,33 @@ class SchemaMapperAgent(BaseAgent):
                 final_pairs.append(det_match[0])
 
         # -------------------------------------------------------
-        # 3b) LAST-RESORT FALLBACK if nothing matched
+        # 3b) NEW: ensure every A column gets *some* match
+        #      (without breaking existing LLM + threshold behaviour)
         # -------------------------------------------------------
-        if not final_pairs:
-            logger.info(
-                "SchemaMapperAgent: no matches from LLM + thresholded deterministic; "
-                "using unthresholded similarity fallback."
-            )
-            for a_col in cols_a:
-                best_b = None
-                best_score = 0.0
-                for b_col in cols_b:
-                    s = name_similarity(a_col, b_col)
-                    if s > best_score:
-                        best_b = b_col
-                        best_score = s
+        final_by_a: dict[str, Dict[str, Any]] = {p["a"]: p for p in final_pairs}
 
-                if best_b and best_score > 0.0:
-                    final_pairs.append(
-                        {"a": a_col, "b": best_b, "confidence": float(best_score)}
-                    )
+        for a_col in cols_a:
+            if a_col in final_by_a:
+                continue  # already matched via LLM/thresholded deterministic
+
+            # best similarity match on B for this A
+            best_b = None
+            best_score = 0.0
+            for b_col in cols_b:
+                s = name_similarity(a_col, b_col)
+                if s > best_score:
+                    best_b = b_col
+                    best_score = s
+
+            if best_b and best_score > 0.0:
+                final_by_a[a_col] = {
+                    "a": a_col,
+                    "b": best_b,
+                    "confidence": float(best_score),
+                }
+
+        # Replace final_pairs with the enriched mapping
+        final_pairs = list(final_by_a.values())
 
         # -------------------------------------------------------
         # 4) Classify final pairs (numeric / array / string)
@@ -190,14 +199,12 @@ class SchemaMapperAgent(BaseAgent):
             else:
                 t = "string"
 
-            matches.append(
-                {
-                    "a_col": a,
-                    "b_col": b,
-                    "confidence": conf,
-                    "type": t,
-                }
-            )
+            matches.append({
+                "a_col": a,
+                "b_col": b,
+                "confidence": conf,
+                "type": t,
+            })
 
         return {
             "matches": matches,
