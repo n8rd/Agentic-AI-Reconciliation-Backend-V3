@@ -2,19 +2,41 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
-import pandas as pd
-
 from .base_agent import BaseAgent
 from backend.utils.similarity import name_similarity
 from backend.utils.similarity import normalize
 from backend.providers.factory import get_llm_provider
-#from langchain_core.messages import HumanMessage
 
+import json
+import re
+from typing import Any, Dict, List
+
+import pandas as pd
+
+from backend.providers.factory import get_llm_provider
+from backend.utils.logger import logger
 
 LLM_THRESHOLD = 0.65      # Used for deterministic fallback
 FINAL_MATCH_THRESHOLD = 0.55  # LLM confidence cutoff
 
+def _tokenize(name: str) -> set[str]:
+    # Split on non-alphanumeric, lowercase, drop empties
+    tokens = re.split(r"[^a-z0-9]+", name.lower())
+    return {t for t in tokens if t}
+
+
+def _name_similarity(a: str, b: str) -> float:
+    """
+    Very simple Jaccard-like similarity on name tokens.
+    Returns value in [0, 1].
+    """
+    ta = _tokenize(a)
+    tb = _tokenize(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union
 
 class SchemaMapperAgent(BaseAgent):
     """
@@ -28,7 +50,6 @@ class SchemaMapperAgent(BaseAgent):
         super().__init__()
         # use the provider factory – this stays extensible (openai / gemini / mock)
         self.llm = get_llm_provider()
-
 
     def run(self, data: Dict[str, Any]) -> Dict[str, Any]:
         # Support both df_a/df_b and data_a/data_b
@@ -49,7 +70,6 @@ class SchemaMapperAgent(BaseAgent):
             raise ValueError(
                 "SchemaMapperAgent.run expects key 'df_b' or 'data_b' in input data."
             )
-
 
         cols_a = df_a.columns.tolist()
         cols_b = df_b.columns.tolist()
@@ -72,21 +92,23 @@ class SchemaMapperAgent(BaseAgent):
             f"Columns A: {cols_a}\n"
             f"Columns B: {cols_b}\n"
             "Return ONLY a JSON array of objects like:\n"
-            "[{\"a\": \"colA\", \"b\": \"colB\", \"confidence\": 0.0 }, ...]"
+            '[{"a": "colA", "b": "colB", "confidence": 0.0 }, ...]'
         )
 
-        #llm_response = self.llm.invoke([HumanMessage(content=llm_prompt)])
-        #llm_pairs = self._safe_extract_llm_pairs(llm_response.content)
-
         # Call the provider abstraction
-        raw_text = self.llm.chat(llm_prompt)
+        try:
+            raw_text = self.llm.chat(llm_prompt)
+        except Exception as e:
+            logger.error("SchemaMapperAgent LLM error: %s", e, exc_info=True)
+            raw_text = ""
+
         llm_pairs = self._safe_extract_llm_pairs(raw_text)
 
         # index LLM suggestions
         llm_map = {(p["a"], p["b"]): p["confidence"] for p in llm_pairs}
 
         # -------------------------------------------------------
-        # 2) Deterministic fallback matching
+        # 2) Deterministic fallback matching (thresholded)
         # -------------------------------------------------------
         det_candidates: List[Dict[str, Any]] = []
         for a_col in cols_a:
@@ -99,11 +121,9 @@ class SchemaMapperAgent(BaseAgent):
                     best_score = s
 
             if best_b and best_score >= LLM_THRESHOLD:
-                det_candidates.append({
-                    "a": a_col,
-                    "b": best_b,
-                    "confidence": best_score
-                })
+                det_candidates.append(
+                    {"a": a_col, "b": best_b, "confidence": best_score}
+                )
 
         # -------------------------------------------------------
         # 3) Merge LLM + deterministic
@@ -123,6 +143,29 @@ class SchemaMapperAgent(BaseAgent):
             det_match = [p for p in det_candidates if p["a"] == a_col]
             if det_match:
                 final_pairs.append(det_match[0])
+
+        # -------------------------------------------------------
+        # 3b) LAST-RESORT FALLBACK if nothing matched
+        #      (NEW: preserves existing behaviour, only kicks in when final_pairs is empty)
+        # -------------------------------------------------------
+        if not final_pairs:
+            logger.info(
+                "SchemaMapperAgent: no matches from LLM+thresholded deterministic; "
+                "using unthresholded similarity fallback."
+            )
+            for a_col in cols_a:
+                best_b = None
+                best_score = 0.0
+                for b_col in cols_b:
+                    s = name_similarity(a_col, b_col)
+                    if s > best_score:
+                        best_b = b_col
+                        best_score = s
+
+                if best_b and best_score > 0.0:
+                    final_pairs.append(
+                        {"a": a_col, "b": best_b, "confidence": float(best_score)}
+                    )
 
         # -------------------------------------------------------
         # 4) Classify final pairs (numeric / array / string)
@@ -149,12 +192,14 @@ class SchemaMapperAgent(BaseAgent):
             else:
                 t = "string"
 
-            matches.append({
-                "a_col": a,
-                "b_col": b,
-                "confidence": conf,
-                "type": t,
-            })
+            matches.append(
+                {
+                    "a_col": a,
+                    "b_col": b,
+                    "confidence": conf,
+                    "type": t,
+                }
+            )
 
         return {
             "matches": matches,

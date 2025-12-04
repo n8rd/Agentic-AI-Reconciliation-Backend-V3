@@ -86,16 +86,50 @@ def node_load(state: ReconState) -> ReconState:
         state.columns_b = df_b.columns.tolist()  # <-- NEW
 
     return state
+
 def node_map(state: ReconState) -> ReconState:
     """
     Run schema mapping to propose column matches.
-    We DO NOT set PENDING_APPROVAL here anymore; that happens in node_approval.
+
+    Prefer full DataFrames from state (data_a / data_b or df_a / df_b).
+    Fall back to df_a_sample / df_b_sample only if full data is missing.
     """
     import pandas as pd
-    df_a = pd.DataFrame(state.df_a_sample)
-    df_b = pd.DataFrame(state.df_b_sample)
+    from backend.utils.logger import logger
+
+    # Prefer full DFs if available (keeps original behaviour)
+    df_a = getattr(state, "data_a", None) or getattr(state, "df_a", None)
+    df_b = getattr(state, "data_b", None) or getattr(state, "df_b", None)
+
+    # Fallback: rebuild from samples only if needed
+    if df_a is None and getattr(state, "df_a_sample", None) is not None:
+        df_a = pd.DataFrame(state.df_a_sample)
+    if df_b is None and getattr(state, "df_b_sample", None) is not None:
+        df_b = pd.DataFrame(state.df_b_sample)
+
+    # If still nothing, log and return empty mapping – but this *shouldn’t* happen
+    if df_a is None or df_b is None:
+        logger.error(
+            "node_map: missing data_a/data_b and df_a_sample/df_b_sample; "
+            "cannot compute schema mapping."
+        )
+        state.schema_mapping = {
+            "matches": [],
+            "numeric_cols": [],
+            "array_cols": [],
+            "string_cols": [],
+        }
+        return state
+
+    # Run existing schema mapper logic (your run() that returns matches / numeric_cols / etc.)
     state.schema_mapping = sm.run({"df_a": df_a, "df_b": df_b})
+
+    # Make sure columns_a / columns_b are in state for the UI
+    state.columns_a = df_a.columns.tolist()
+    state.columns_b = df_b.columns.tolist()
+
     return state
+
 
 def node_approval(state: ReconState) -> ReconState:
     """
