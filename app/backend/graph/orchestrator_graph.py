@@ -11,6 +11,7 @@ from backend.connectors.data_loader import load_source_data
 from backend.connectors.bigquery_connector import bigquery, BigQueryConnector
 from backend.connectors.data_loader import materialize_to_bigquery
 
+
 import pandas as pd
 from collections.abc import Mapping
 
@@ -167,66 +168,159 @@ def node_approval(state: ReconState) -> ReconState:
     state.status = "APPROVED"
     return state
 
-def decide_after_approval(state: ReconState):
+def decide_after_approval(state: ReconState) -> str:
     """
-    Route based on approval status:
-    - APPROVED -> continue pipeline (entity_resolve)
-    - PENDING_APPROVAL (or anything else) -> await client input
+    Decide what happens after the approval node.
+
+    - When called from /reconcile:
+      status will typically be "PENDING_APPROVAL" (or None),
+      so we route to "await" and end the graph → UI shows mapping for user approval.
+
+    - When called from /reconcile/approve:
+      routes will set status="APPROVED" and include an approval payload,
+      so we route to "entity_resolve" to continue the pipeline.
     """
-    if state.status == "APPROVED":
+
+    status = getattr(state, "status", None)
+
+    if status == "APPROVED":
         return "entity_resolve"
-    # default: wait for client to inspect mapping and call again
+
+    # Default (PENDING_APPROVAL or anything else) → stop at "await"
     return "await"
+
 
 def node_await(state: ReconState) -> ReconState:
     # Pause here; client inspects mapping and calls again with approval set
     return state
 
 def node_entity_resolve(state: ReconState) -> ReconState:
-    # old behavior
-    result = entity_resolver_agent.run({
+    """
+    Run entity resolution after schema mapping.
+    Uses full dataframes plus mapping + thresholds + any existing entities.
+    """
+
+    payload = {
         "data_a": state.data_a,
         "data_b": state.data_b,
         "schema_mapping": state.schema_mapping,
-    })
+        # extra context in case EntityResolverAgent uses it
+        "thresholds": getattr(state, "thresholds", None),
+        "entities": getattr(state, "entities", []) or [],
+        "dataset_a": getattr(state, "dataset_a", None),
+        "dataset_b": getattr(state, "dataset_b", None),
+    }
 
-    state.entity_resolved = result
+    result = er.run(payload)
 
-    # --- Re-capture columns (optional) ---
-    # In case entity resolver drops, renames, or expands columns
-    state.columns_a = state.data_a.columns.tolist()
-    state.columns_b = state.data_b.columns.tolist()
+    # If the agent returns explicit entities, persist them on state
+    if isinstance(result, dict) and "entities" in result:
+        state.entities = result["entities"]
+        state.entity_resolved = result  # keep whole payload if useful
+    else:
+        state.entity_resolved = result
+
+    # Re-capture columns in case entity resolver changed anything
+    if state.data_a is not None:
+        state.columns_a = state.data_a.columns.tolist()
+    if state.data_b is not None:
+        state.columns_b = state.data_b.columns.tolist()
 
     return state
+
 
 
 def node_sql(state: ReconState) -> ReconState:
-    # We expect materialize_sources to have set table_fqn for both datasets.
-    table_a = state.dataset_a.get("table_fqn") if state.dataset_a else None
-    table_b = state.dataset_b.get("table_fqn") if state.dataset_b else None
+    """
+    Use QuerySynthesizerAgent to build the reconciliation SQL
+    and execute it on BigQuery, populating state.sql and state.result_df.
+    """
 
-    if not table_a or not table_b:
-        raise ValueError("table_fqn must be set for dataset_a and dataset_b before SQL synthesis")
+    # Defensive: dataset configs must exist
+    if not state.dataset_a or not state.dataset_b:
+        logger.error("node_sql: dataset_a or dataset_b missing on state")
+        state.sql = None
+        state.result_df = None
+        return state
 
-    payload = {
-        "schema_mapping": state.schema_mapping,
+    # Table FQNs produced by node_load/file loader
+    table_a = state.dataset_a.get("table_fqn")
+    table_b = state.dataset_b.get("table_fqn")
+
+    # Schema mapping-derived types
+    schema_mapping = state.schema_mapping or {}
+    numeric_cols = schema_mapping.get("numeric_cols", [])
+    array_cols = schema_mapping.get("array_cols", [])
+
+    # Columns discovered earlier
+    columns_a = getattr(state, "columns_a", [])
+    columns_b = getattr(state, "columns_b", [])
+
+    # Entities and approval from UI
+    entities = getattr(state, "entities", []) or []
+    approval = getattr(state, "approval", None)
+
+    qs_payload = {
+        "schema_mapping": schema_mapping,
         "thresholds": state.thresholds,
         "table_a": table_a,
         "table_b": table_b,
-        # critical: real columns from loaded DataFrames
-        "columns_a": state.columns_a or [],
-        "columns_b": state.columns_b or [],
+        "numeric_cols": numeric_cols,
+        "array_cols": array_cols,
+        "columns_a": columns_a,
+        "columns_b": columns_b,
+        "entities": entities,
+        "approval": approval,
     }
 
-    out = qs.run(payload)  # qs = QuerySynthesizerAgent instance
-    state.sql = out["sql"]
+    # Let the agent synthesize SQL
+    qs_result = qs.run(qs_payload)
+
+    sql = None
+    if isinstance(qs_result, dict):
+        sql = qs_result.get("sql")
+
+    if not sql:
+        logger.error("node_sql: QuerySynthesizerAgent did not return SQL")
+        state.sql = None
+        state.result_df = None
+        return state
+
+    state.sql = sql
+
+    # Execute SQL on BigQuery and store DataFrame on state
+    try:
+        bq = BigQueryConnector(bigquery)
+        df = bq.run_query_to_df(sql)
+    except Exception as e:
+        logger.error("node_sql: error executing BigQuery SQL: %s", e, exc_info=True)
+        state.result_df = None
+        return state
+
+    state.result_df = df
     return state
 
 
-def decide_after_sql(state: ReconState):
-    if state.sql and "SELECT" in state.sql.upper():
-        return "exec"
-    return "explain"
+
+def decide_after_sql(state: ReconState) -> str:
+    """
+    Decide what happens after SQL synthesis.
+
+    Typical behaviour:
+    - Normal mode: run "exec" to execute the SQL, then "explain".
+    - Dry-run mode (if you ever support it): skip exec and go straight to "explain".
+
+    For now we assume normal mode unless a specific flag is set.
+    """
+
+    # Example optional flag on state: dry_run: bool = False
+    dry_run = getattr(state, "dry_run", False)
+
+    if dry_run:
+        return "explain"
+
+    return "exec"
+
 
 def node_exec(state: ReconState) -> ReconState:
     if bigquery is None or not settings.google_project_id:
@@ -242,35 +336,77 @@ def node_exec(state: ReconState) -> ReconState:
     return state
 
 def node_explain(state: ReconState) -> ReconState:
-    out = eg.run({"sql": state.sql, "bq_status": state.bq_status})
-    state.explanation = out["explanation"]
-    # Final status for the full pipeline
-    state.status = "DONE"
+    """
+    Generate a natural language explanation of the reconciliation results
+    using ExplanationGeneratorAgent.
+    """
+
+    df = getattr(state, "result_df", None)
+
+    # If there are no results, keep it simple
+    if df is None or df.empty:
+        state.explanation = (
+            "No reconciliation differences were found, or the query returned no rows."
+        )
+        return state
+
+    # Convert a small sample of results to JSON-safe records for the LLM
+    sample_records = df.head(20).to_dict(orient="records")
+
+    payload = {
+        "schema_mapping": state.schema_mapping,
+        "thresholds": state.thresholds,
+        "entities": getattr(state, "entities", []) or [],
+        "results": sample_records,
+    }
+
+    try:
+        eg_result = eg.run(payload)
+    except Exception as e:
+        logger.error("node_explain: ExplanationGeneratorAgent error: %s", e, exc_info=True)
+        state.explanation = "Reconciliation completed, but explanation generation failed."
+        return state
+
+    # Expecting something like {"explanation": "..."}
+    if isinstance(eg_result, dict):
+        state.explanation = (
+            eg_result.get("explanation")
+            or eg_result.get("summary")
+            or "Reconciliation completed."
+        )
+    else:
+        state.explanation = str(eg_result)
+
     return state
+
 
 def build_graph():
     g = StateGraph(ReconState)
 
     # Nodes
     g.add_node("load", node_load)
-    g.add_node("materialize_sources", materialize_sources)  # <-- stays
+    g.add_node("materialize_sources", materialize_sources)  # stays
     g.add_node("map", node_map)
     g.add_node("approval_node", node_approval)
-    g.add_node("await", node_await)
+    g.add_node("await", node_await)               # used for PENDING_APPROVAL stop
     g.add_node("entity_resolve", node_entity_resolve)
-    g.add_node("sql_node", node_sql)
-    g.add_node("exec", node_exec)
+    g.add_node("sql_node", node_sql)              # just builds SQL via qs
+    g.add_node("exec", node_exec)                 # runs SQL on BQ, sets result_df
     g.add_node("explain", node_explain)
 
     # Edges
     g.add_edge(START, "load")
 
-    # Insert materialize_sources between load and map
+    # load -> materialize_sources -> map
     g.add_edge("load", "materialize_sources")
     g.add_edge("materialize_sources", "map")
 
+    # map -> approval
     g.add_edge("map", "approval_node")
 
+    # After approval:
+    # - First call (/reconcile): status=PENDING_APPROVAL → go to "await" → END (front-end shows mapping)
+    # - Second call (/reconcile/approve): status=APPROVED → go to "entity_resolve"
     g.add_conditional_edges(
         "approval_node",
         decide_after_approval,
@@ -281,8 +417,13 @@ def build_graph():
     )
 
     g.add_edge("await", END)
+
+    # After entity resolution, always go to SQL synthesis node
     g.add_edge("entity_resolve", "sql_node")
 
+    # After SQL synthesis:
+    # - Normal flow: run exec first, then explain
+    # - Optional: if you ever support a "dry run" mode, you can jump straight to explain
     g.add_conditional_edges(
         "sql_node",
         decide_after_sql,
@@ -296,6 +437,7 @@ def build_graph():
     g.add_edge("explain", END)
 
     return g.compile()
+
 
 graph = build_graph()
 
