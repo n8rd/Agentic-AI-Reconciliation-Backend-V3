@@ -92,19 +92,18 @@ class SchemaMapperAgent(BaseAgent):
             f"Columns A: {cols_a}\n"
             f"Columns B: {cols_b}\n"
             "Return ONLY a JSON array of objects like:\n"
-            '[{"a": "colA", "b": "colB", "confidence": 0.0 }, ...]'
+            '[{\"a\": \"colA\", \"b\": \"colB\", \"confidence\": 0.0 }, ...]'
         )
 
-        # Call the provider abstraction
         try:
-            raw_text = self.llm.chat(llm_prompt)
+            raw_text = self.llm.chat(llm_prompt)  # uses providers/factory + .chat()
         except Exception as e:
             logger.error("SchemaMapperAgent LLM error: %s", e, exc_info=True)
             raw_text = ""
 
         llm_pairs = self._safe_extract_llm_pairs(raw_text)
 
-        # index LLM suggestions
+        # index LLM suggestions (still used elsewhere; keep it)
         llm_map = {(p["a"], p["b"]): p["confidence"] for p in llm_pairs}
 
         # -------------------------------------------------------
@@ -146,11 +145,10 @@ class SchemaMapperAgent(BaseAgent):
 
         # -------------------------------------------------------
         # 3b) LAST-RESORT FALLBACK if nothing matched
-        #      (NEW: preserves existing behaviour, only kicks in when final_pairs is empty)
         # -------------------------------------------------------
         if not final_pairs:
             logger.info(
-                "SchemaMapperAgent: no matches from LLM+thresholded deterministic; "
+                "SchemaMapperAgent: no matches from LLM + thresholded deterministic; "
                 "using unthresholded similarity fallback."
             )
             for a_col in cols_a:

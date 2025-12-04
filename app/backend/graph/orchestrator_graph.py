@@ -94,20 +94,26 @@ def node_map(state: ReconState) -> ReconState:
     Prefer full DataFrames from state (data_a / data_b or df_a / df_b).
     Fall back to df_a_sample / df_b_sample only if full data is missing.
     """
-    import pandas as pd
-    from backend.utils.logger import logger
 
-    # Prefer full DFs if available (keeps original behaviour)
-    df_a = getattr(state, "data_a", None) or getattr(state, "df_a", None)
-    df_b = getattr(state, "data_b", None) or getattr(state, "df_b", None)
-
-    # Fallback: rebuild from samples only if needed
-    if df_a is None and getattr(state, "df_a_sample", None) is not None:
+    # ---- pick df_a ----
+    df_a = None
+    if getattr(state, "data_a", None) is not None:
+        df_a = state.data_a
+    elif getattr(state, "df_a", None) is not None:
+        df_a = state.df_a
+    elif getattr(state, "df_a_sample", None) is not None:
         df_a = pd.DataFrame(state.df_a_sample)
-    if df_b is None and getattr(state, "df_b_sample", None) is not None:
+
+    # ---- pick df_b ----
+    df_b = None
+    if getattr(state, "data_b", None) is not None:
+        df_b = state.data_b
+    elif getattr(state, "df_b", None) is not None:
+        df_b = state.df_b
+    elif getattr(state, "df_b_sample", None) is not None:
         df_b = pd.DataFrame(state.df_b_sample)
 
-    # If still nothing, log and return empty mapping – but this *shouldn’t* happen
+    # Defensive: if still missing, return empty mapping
     if df_a is None or df_b is None:
         logger.error(
             "node_map: missing data_a/data_b and df_a_sample/df_b_sample; "
@@ -121,10 +127,10 @@ def node_map(state: ReconState) -> ReconState:
         }
         return state
 
-    # Run existing schema mapper logic (your run() that returns matches / numeric_cols / etc.)
+    sm = SchemaMapperAgent()
     state.schema_mapping = sm.run({"df_a": df_a, "df_b": df_b})
 
-    # Make sure columns_a / columns_b are in state for the UI
+    # Columns for UI
     state.columns_a = df_a.columns.tolist()
     state.columns_b = df_b.columns.tolist()
 
@@ -304,14 +310,20 @@ def run_graph(payload: dict) -> dict:
     final = graph.invoke(state)
 
     # 1) Normalize to a plain dict
-    if hasattr(final, "dict"):  # Pydantic ReconState
-        raw = final.dict()
-    else:  # AddableValuesDict or other mapping-like
-        try:
-            raw = dict(final)
-        except TypeError:
-            # Fallback – should not usually happen
-            raw = final
+    # Normalize to a dict (ReconState or AddableValuesDict)
+    if isinstance(final, ReconState):
+        if hasattr(final, "dict"):  # Pydantic ReconState
+            raw = final.dict()
+        else:  # AddableValuesDict or other mapping-like
+            try:
+                raw = dict(final)
+            except TypeError:
+                # Fallback – should not usually happen
+                raw = final
+
+    else:
+        raw = dict(final)
+
 
     # 2) Strip/convert non-serializable values (DataFrames)
     clean: dict = {}
