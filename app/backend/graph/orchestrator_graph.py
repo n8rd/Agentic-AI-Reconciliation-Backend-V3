@@ -344,13 +344,13 @@ def node_exec(state: ReconState) -> ReconState:
 def node_explain(state: ReconState) -> ReconState:
     """
     Generate a natural language explanation of the reconciliation results
-    using ExplanationGeneratorAgent, and (importantly) ensure that
-    reconciliation rows are available on state.result.
+    using ExplanationGeneratorAgent, and make sure any rows returned by
+    the agent are copied into state.result.
     """
 
     df = getattr(state, "result_df", None)
 
-    # Optional: small sample for LLM context if we ever want it
+    # Try to build a small sample of results for context; safe even if df is None
     try:
         if df is not None and not df.empty:
             sample_records = df.head(20).to_dict(orient="records")
@@ -389,10 +389,11 @@ def node_explain(state: ReconState) -> ReconState:
         return state
 
     if isinstance(eg_result, dict):
-        # 1) Explanation (same behaviour as before, but with better fallback)
         base_no_rows_msg = (
             "No reconciliation differences were found, or the query returned no rows."
         )
+
+        # 1) Explanation (preserves your previous behaviour)
         state.explanation = (
             eg_result.get("explanation")
             or eg_result.get("summary")
@@ -400,26 +401,22 @@ def node_explain(state: ReconState) -> ReconState:
             or (base_no_rows_msg if (df is None or getattr(df, "empty", False)) else "Reconciliation completed.")
         )
 
-        # 2) BigQuery execution status from EG (if present)
+        # 2) BigQuery execution status, if returned
         if "bq_status" in eg_result and eg_result["bq_status"] is not None:
             state.bq_status = eg_result["bq_status"]
 
-        # 3) Full reconciliation rows from EG (this is where `result` comes from)
+        # 3) Full reconciliation result rows from ExplanationGeneratorAgent
         if "result" in eg_result and eg_result["result"] is not None:
-            # ReconState.result: Any | None = None
             state.result = eg_result["result"]
 
-        # 4) Optional metrics if you ever add them to EG
+        # 4) Optional metrics (only if you later add ReconState.metrics)
         if "metrics" in eg_result and hasattr(state, "metrics"):
             state.metrics = eg_result["metrics"]
     else:
         # Very defensive fallback
         state.explanation = str(eg_result)
 
-    # NOTE: we do NOT touch state.result_df here.
-    # run_graph(...) will still do its DF → list conversion if result_df is a DataFrame.
     return state
-
 
 
 def build_graph():
@@ -499,9 +496,10 @@ def run_graph(payload: dict) -> dict:
     # REMOVE ALL DATAFRAMES (any possible location)
     # ---------------------------------------------------------
 
+
     # Remove full DataFrames
     for attr in ["data_a", "data_b", "df_a_sample", "df_b_sample",
-                 "result_df", "entity_resolved"]:
+                 "entity_resolved"]:
         if hasattr(final, attr):
             val = getattr(final, attr)
             if isinstance(val, pd.DataFrame):
@@ -512,6 +510,7 @@ def run_graph(payload: dict) -> dict:
                     if isinstance(v, pd.DataFrame):
                         val[k] = None
                 setattr(final, attr, val)
+
 
     # Convert result_df → result list
     if hasattr(final, "result_df") and isinstance(final.result_df, pd.DataFrame):
