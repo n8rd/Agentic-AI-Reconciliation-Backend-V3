@@ -7,7 +7,7 @@ from typing import Dict, List, Tuple
 ARRAY_UDFS = r"""
 CREATE TEMP FUNCTION ARRAY_EXCEPT_CUSTOM(a ARRAY<STRING>, b ARRAY<STRING>)
 RETURNS ARRAY<STRING>
-LANGUAGE js AS ''' # Changed the inner delimiters to single quotes (''') to avoid conflicts
+LANGUAGE js AS '''
   if (!a || !b) return [];
   const setB = new Set(b);
   return a.filter(x => !setB.has(x));
@@ -15,7 +15,7 @@ LANGUAGE js AS ''' # Changed the inner delimiters to single quotes (''') to avoi
 
 CREATE TEMP FUNCTION ARRAY_DIFF_SCORE(a ARRAY<STRING>, b ARRAY<STRING>)
 RETURNS FLOAT64
-LANGUAGE js AS ''' # Changed inner delimiters to single quotes (''')
+LANGUAGE js AS '''
   if (!a || !b) return 0;
   const inter = a.filter(x => b.includes(x)).length;
   const union = new Set([...a, ...b]).size;
