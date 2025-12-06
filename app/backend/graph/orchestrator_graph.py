@@ -360,27 +360,50 @@ def node_explain(state: ReconState) -> ReconState:
     sample_records = df.head(20).to_dict(orient="records")
 
     payload = {
-        "schema_mapping": state.schema_mapping,
-        "thresholds": state.thresholds,
-        "entities": getattr(state, "entities", []) or [],
-        "results": sample_records,
+        "sql": state.sql,
+        "bq_status": state.bq_status,
+        "extra": {
+            "schema_mapping": state.schema_mapping,
+            "thresholds": state.thresholds,
+            "entities": state.entities or [],
+        },
     }
 
     try:
         eg_result = eg.run(payload)
     except Exception as e:
-        logger.error("node_explain: ExplanationGeneratorAgent error: %s", e, exc_info=True)
-        state.explanation = "Reconciliation completed, but explanation generation failed."
+        logger.error(
+            "node_explain: ExplanationGeneratorAgent error: %s", e, exc_info=True
+        )
+        state.explanation = (
+            "Reconciliation completed, but explanation generation failed."
+        )
         return state
 
-    # Expecting something like {"explanation": "..."}
     if isinstance(eg_result, dict):
+        # 1) Explanation (same logic as before, just slightly safer)
         state.explanation = (
-            eg_result.get("explanation")
-            or eg_result.get("summary")
-            or "Reconciliation completed."
+                eg_result.get("explanation")
+                or eg_result.get("summary")
+                or state.explanation
+                or "Reconciliation completed."
         )
+
+        # 2) BigQuery execution status, if returned
+        if "bq_status" in eg_result and eg_result["bq_status"] is not None:
+            state.bq_status = eg_result["bq_status"]
+
+        # 3) Full reconciliation result rows from BigQuery
+        if "result" in eg_result and eg_result["result"] is not None:
+            # ReconState.result is already declared as `Any | None`
+            state.result = eg_result["result"]
+
+        # 4) Optional: if you later add metrics/summary in EG, merge here
+        if "metrics" in eg_result and hasattr(state, "metrics"):
+            state.metrics = eg_result["metrics"]  # only if ReconState.metrics exists
+
     else:
+        # Very defensive fallback
         state.explanation = str(eg_result)
 
     return state
