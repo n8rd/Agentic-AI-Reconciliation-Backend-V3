@@ -344,20 +344,20 @@ def node_exec(state: ReconState) -> ReconState:
 def node_explain(state: ReconState) -> ReconState:
     """
     Generate a natural language explanation of the reconciliation results
-    using ExplanationGeneratorAgent.
+    using ExplanationGeneratorAgent, and (importantly) ensure that
+    reconciliation rows are available on state.result.
     """
 
     df = getattr(state, "result_df", None)
 
-    # If there are no results, keep it simple
-    if df is None or df.empty:
-        state.explanation = (
-            "No reconciliation differences were found, or the query returned no rows."
-        )
-        return state
-
-    # Convert a small sample of results to JSON-safe records for the LLM
-    sample_records = df.head(20).to_dict(orient="records")
+    # Optional: small sample for LLM context if we ever want it
+    try:
+        if df is not None and not df.empty:
+            sample_records = df.head(20).to_dict(orient="records")
+        else:
+            sample_records = []
+    except Exception:
+        sample_records = []
 
     payload = {
         "sql": state.sql,
@@ -366,6 +366,7 @@ def node_explain(state: ReconState) -> ReconState:
             "schema_mapping": state.schema_mapping,
             "thresholds": state.thresholds,
             "entities": state.entities or [],
+            "sample_records": sample_records,
         },
     }
 
@@ -375,38 +376,50 @@ def node_explain(state: ReconState) -> ReconState:
         logger.error(
             "node_explain: ExplanationGeneratorAgent error: %s", e, exc_info=True
         )
-        state.explanation = (
-            "Reconciliation completed, but explanation generation failed."
-        )
+
+        # Fallback explanation depending on whether we had any rows
+        if df is None or (hasattr(df, "empty") and df.empty):
+            state.explanation = (
+                "No reconciliation differences were found, or the query returned no rows."
+            )
+        else:
+            state.explanation = (
+                "Reconciliation completed, but explanation generation failed."
+            )
         return state
 
     if isinstance(eg_result, dict):
-        # 1) Explanation (same logic as before, just slightly safer)
+        # 1) Explanation (same behaviour as before, but with better fallback)
+        base_no_rows_msg = (
+            "No reconciliation differences were found, or the query returned no rows."
+        )
         state.explanation = (
-                eg_result.get("explanation")
-                or eg_result.get("summary")
-                or state.explanation
-                or "Reconciliation completed."
+            eg_result.get("explanation")
+            or eg_result.get("summary")
+            or state.explanation
+            or (base_no_rows_msg if (df is None or getattr(df, "empty", False)) else "Reconciliation completed.")
         )
 
-        # 2) BigQuery execution status, if returned
+        # 2) BigQuery execution status from EG (if present)
         if "bq_status" in eg_result and eg_result["bq_status"] is not None:
             state.bq_status = eg_result["bq_status"]
 
-        # 3) Full reconciliation result rows from BigQuery
+        # 3) Full reconciliation rows from EG (this is where `result` comes from)
         if "result" in eg_result and eg_result["result"] is not None:
-            # ReconState.result is already declared as `Any | None`
+            # ReconState.result: Any | None = None
             state.result = eg_result["result"]
 
-        # 4) Optional: if you later add metrics/summary in EG, merge here
+        # 4) Optional metrics if you ever add them to EG
         if "metrics" in eg_result and hasattr(state, "metrics"):
-            state.metrics = eg_result["metrics"]  # only if ReconState.metrics exists
-
+            state.metrics = eg_result["metrics"]
     else:
         # Very defensive fallback
         state.explanation = str(eg_result)
 
+    # NOTE: we do NOT touch state.result_df here.
+    # run_graph(...) will still do its DF → list conversion if result_df is a DataFrame.
     return state
+
 
 
 def build_graph():

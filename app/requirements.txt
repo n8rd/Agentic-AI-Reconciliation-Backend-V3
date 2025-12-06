@@ -21,4 +21,4 @@ python-multipart==0.0.9
 google-generativeai
 google-cloud-aiplatform
 pyarrow>=14.0.1
-
+db-dtypes>=1.0.0
